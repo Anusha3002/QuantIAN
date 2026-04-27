@@ -1,0 +1,1 @@
+"""QuantIAN registry service package."""

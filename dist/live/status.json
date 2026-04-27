@@ -1,0 +1,18 @@
+{
+  "completed_at": "2026-04-21T05:45:48.553855+00:00",
+  "endpoints": {
+    "anomaly": "https://quantian-azure-anomaly.yellowocean-36a09ba3.eastus.azurecontainerapps.io",
+    "dashboard": "http://3.217.147.34:8501",
+    "ingestion": "http://3.217.147.34:8001",
+    "registry": "http://3.217.147.34:8000",
+    "risk": "http://35.192.123.119:8003"
+  },
+  "health": {
+    "anomaly": true,
+    "dashboard": true,
+    "ingestion": true,
+    "portfolio_seeded": true,
+    "registry": true,
+    "risk": true
+  }
+}

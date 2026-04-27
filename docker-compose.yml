@@ -1,0 +1,201 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: quantian-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD", "sh", "-c", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -W 2 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  registry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: quantian/quantian:latest
+    container_name: quantian-registry
+    command: uvicorn registry_service.main:app --host 0.0.0.0 --port 8000
+    environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8000"
+      BASE_URL: http://registry:8000
+      REGISTRY_URL: http://registry:8000
+      LEDGER_URL: http://registry:8000
+      QUANTIAN_DATA_DIR: /data
+      LEDGER_VERIFY_INTERVAL_SECONDS: "60"
+    volumes:
+      - registry-data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  ingestion:
+    image: quantian/quantian:latest
+    container_name: quantian-ingestion
+    depends_on:
+      registry:
+        condition: service_healthy
+    command: uvicorn aws_ingestion.main:app --host 0.0.0.0 --port 8001
+    environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8001"
+      BASE_URL: http://ingestion:8001
+      AWS_INGESTION_BASE_URL: http://ingestion:8001
+      REGISTRY_URL: http://registry:8000
+      LEDGER_URL: http://registry:8000
+      MQTT_BROKER_URL: mqtt://mosquitto:1883
+      QUANTIAN_DATA_DIR: /data
+    volumes:
+      - ingestion-data:/data
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  anomaly:
+    image: quantian/quantian:latest
+    container_name: quantian-anomaly
+    depends_on:
+      registry:
+        condition: service_healthy
+    command: uvicorn azure_anomaly.main:app --host 0.0.0.0 --port 8002
+    environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8002"
+      BASE_URL: http://anomaly:8002
+      AZURE_ANOMALY_BASE_URL: http://anomaly:8002
+      REGISTRY_URL: http://registry:8000
+      LEDGER_URL: http://registry:8000
+      QUANTIAN_DATA_DIR: /data
+      STORAGE_BACKEND: file
+    volumes:
+      - anomaly-data:/data
+    ports:
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  risk:
+    image: quantian/quantian:latest
+    container_name: quantian-risk
+    depends_on:
+      registry:
+        condition: service_healthy
+    command: uvicorn gcp_risk.main:app --host 0.0.0.0 --port 8003
+    environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8003"
+      BASE_URL: http://risk:8003
+      GCP_RISK_BASE_URL: http://risk:8003
+      REGISTRY_URL: http://registry:8000
+      LEDGER_URL: http://registry:8000
+      QUANTIAN_DATA_DIR: /data
+    volumes:
+      - risk-data:/data
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  iot-bridge:
+    image: quantian/quantian:latest
+    container_name: quantian-iot-bridge
+    depends_on:
+      registry:
+        condition: service_healthy
+      ingestion:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    command: uvicorn iot.main:app --host 0.0.0.0 --port 8004
+    environment:
+      SERVICE_HOST: 0.0.0.0
+      SERVICE_PORT: "8004"
+      BASE_URL: http://iot-bridge:8004
+      IOT_BRIDGE_BASE_URL: http://iot-bridge:8004
+      REGISTRY_URL: http://registry:8000
+      LEDGER_URL: http://registry:8000
+      MQTT_BROKER_URL: mqtt://mosquitto:1883
+      AWS_INGESTION_URL: http://ingestion:8001
+      QUANTIAN_DATA_DIR: /data
+    volumes:
+      - iot-bridge-data:/data
+    ports:
+      - "8004:8004"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  streamlit:
+    image: quantian/quantian:latest
+    container_name: quantian-streamlit
+    depends_on:
+      registry:
+        condition: service_healthy
+    command: >
+      streamlit run dashboard/app.py
+      --server.headless true
+      --server.port 8501
+      --server.address 0.0.0.0
+    environment:
+      REGISTRY_URL: http://registry:8000
+      AWS_INGESTION_URL: http://ingestion:8001
+      AZURE_ANOMALY_URL: http://anomaly:8002
+      GCP_RISK_URL: http://risk:8003
+      IOT_BRIDGE_URL: http://iot-bridge:8004
+    ports:
+      - "8501:8501"
+    profiles: ["ui"]
+    restart: unless-stopped
+
+  web-dashboard:
+    build:
+      context: ./web_dashboard
+      dockerfile: Dockerfile
+    container_name: quantian-web-dashboard
+    ports:
+      - "5174:80"
+    depends_on:
+      registry:
+        condition: service_healthy
+    environment:
+      # served by nginx; proxied in the image config
+      REGISTRY_URL: http://registry:8000
+      AWS_INGESTION_URL: http://ingestion:8001
+      AZURE_ANOMALY_URL: http://anomaly:8002
+      GCP_RISK_URL: http://risk:8003
+      IOT_BRIDGE_URL: http://iot-bridge:8004
+    profiles: ["ui"]
+    restart: unless-stopped
+
+volumes:
+  registry-data:
+  ingestion-data:
+  anomaly-data:
+  risk-data:
+  iot-bridge-data:

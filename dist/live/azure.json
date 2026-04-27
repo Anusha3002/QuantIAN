@@ -1,0 +1,23 @@
+{
+  "app_name": "quantian-azure-anomaly",
+  "base_url": "https://quantian-azure-anomaly.yellowocean-36a09ba3.eastus.azurecontainerapps.io",
+  "cpu": "0.5",
+  "default_hostname": "quantian-azure-anomaly.yellowocean-36a09ba3.eastus.azurecontainerapps.io",
+  "environment_name": "quantian-azure-env",
+  "image_ref": "qtanacr9fe59f582c.azurecr.io/quantian/azure-anomaly:20260421053208",
+  "image_repository": "quantian/azure-anomaly",
+  "image_tag": "20260421053208",
+  "latest_revision_name": "quantian-azure-anomaly--0000004",
+  "location": "eastus",
+  "max_replicas": 1,
+  "memory": "1.0Gi",
+  "min_replicas": 1,
+  "registry_name": "qtanacr9fe59f582c",
+  "registry_server": "qtanacr9fe59f582c.azurecr.io",
+  "resource_group": "quantian-rg",
+  "storage_account": "qtanom9fe59f582c",
+  "storage_container": "quantian-state",
+  "storage_type": "azure_blob",
+  "target_port": 8002,
+  "type": "container_app"
+}
