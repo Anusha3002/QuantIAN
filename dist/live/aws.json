@@ -1,1 +1,32 @@
-{"deploy_id":"20260420234009","key_name":"quantian-demo-key-20260420234009","security_group_id":"sg-0ebf64ab6b66bd8d5","instance_id":"i-053e7ea72e9c00e01","allocation_id":"eipalloc-0782d42fe12828197","public_ip":"3.217.147.34"}
+{
+  "account_id": "646265840678",
+  "ecr_access_role_arn": "arn:aws:iam::646265840678:role/QuantIANAppRunnerECRAccessRole",
+  "ingestion": {
+    "base_url": null,
+    "cpu": "256",
+    "ecr_repository": "quantian-ingestion",
+    "ecr_repository_uri": "646265840678.dkr.ecr.us-east-1.amazonaws.com/quantian-ingestion",
+    "image_ref": null,
+    "image_tag": null,
+    "memory": "512",
+    "port": 8001,
+    "service_arn": null,
+    "service_name": "quantian-aws-ingestion"
+  },
+  "region": "us-east-1",
+  "registry": {
+    "base_url": "https://k3dmjiztk3.us-east-1.awsapprunner.com",
+    "cpu": "256",
+    "default_hostname": "k3dmjiztk3.us-east-1.awsapprunner.com",
+    "ecr_repository": "quantian-registry",
+    "ecr_repository_uri": "646265840678.dkr.ecr.us-east-1.amazonaws.com/quantian-registry",
+    "image_ref": "646265840678.dkr.ecr.us-east-1.amazonaws.com/quantian-registry:20260505185544",
+    "image_tag": "20260505185544",
+    "memory": "512",
+    "port": 8000,
+    "service_arn": "arn:aws:apprunner:us-east-1:646265840678:service/quantian-aws-registry/00437945c5ab4b749bc72aecd776203e",
+    "service_name": "quantian-aws-registry"
+  },
+  "registry_host": "646265840678.dkr.ecr.us-east-1.amazonaws.com",
+  "type": "app_runner"
+}

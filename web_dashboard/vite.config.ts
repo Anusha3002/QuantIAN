@@ -2,11 +2,11 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const backendPorts = {
-  registry: 8010,
-  ingestion: 8011,
-  anomaly: 8012,
-  risk: 8013,
-  iot: 8014,
+  registry: 8000,
+  ingestion: 8001,
+  anomaly: 8002,
+  risk: 8003,
+  iot: 8004,
 };
 
 const mkProxy = (port: number) => ({

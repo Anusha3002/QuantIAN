@@ -22,11 +22,34 @@ LIVE_DIR = DIST_DIR / "live"
 BUNDLE_PATH = DIST_DIR / "quantian-deploy.tar.gz"
 AZURE_CONTAINERAPP_CONTEXT_DIR = DIST_DIR / "azure-containerapp-src"
 AZURE_CONTAINERAPP_DOCKERFILE = ROOT_DIR / "azure_anomaly" / "containerapp.Dockerfile"
+GCP_CLOUDRUN_CONTEXT_DIR = DIST_DIR / "gcp-cloudrun-src"
+GCP_CLOUDRUN_DOCKERFILE = ROOT_DIR / "gcp_risk" / "cloudrun.Dockerfile"
+APPRUNNER_REGISTRY_CONTEXT_DIR = DIST_DIR / "aws-apprunner-registry-src"
+APPRUNNER_REGISTRY_DOCKERFILE = ROOT_DIR / "registry_service" / "apprunner.Dockerfile"
+APPRUNNER_INGESTION_CONTEXT_DIR = DIST_DIR / "aws-apprunner-ingestion-src"
+APPRUNNER_INGESTION_DOCKERFILE = ROOT_DIR / "aws_ingestion" / "apprunner.Dockerfile"
 PACKAGE_SCRIPT = ROOT_DIR / "scripts" / "package_deployment_bundle.sh"
 SSH_KEY_PATH = Path("/tmp/quantian_demo_key")
 SSH_PUBLIC_KEY_PATH = Path("/tmp/quantian_demo_key.pub")
 AZURE_CONTAINERAPP_PORT = 8002
 AZURE_CONTAINERAPP_SECRET_NAME = "storconn"
+GCP_CLOUDRUN_PORT = 8003
+APPRUNNER_REGISTRY_PORT = 8000
+APPRUNNER_INGESTION_PORT = 8001
+APPRUNNER_ECR_ACCESS_ROLE_NAME = "QuantIANAppRunnerECRAccessRole"
+APPRUNNER_TRUST_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {"Service": "build.apprunner.amazonaws.com"},
+            "Action": "sts:AssumeRole",
+        }
+    ],
+}
+APPRUNNER_ECR_ACCESS_POLICY_ARN = (
+    "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess"
+)
 SKIP_DIR_NAMES = {
     ".azure-cli",
     ".mypy_cache",
@@ -192,6 +215,54 @@ def package_azure_containerapp_context() -> Path:
     return AZURE_CONTAINERAPP_CONTEXT_DIR
 
 
+def package_gcp_cloudrun_context() -> Path:
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    if GCP_CLOUDRUN_CONTEXT_DIR.exists():
+        shutil.rmtree(GCP_CLOUDRUN_CONTEXT_DIR)
+    GCP_CLOUDRUN_CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(GCP_CLOUDRUN_DOCKERFILE, GCP_CLOUDRUN_CONTEXT_DIR / "Dockerfile")
+    shutil.copy2(
+        ROOT_DIR / "gcp_risk" / "requirements-cloudrun.txt",
+        GCP_CLOUDRUN_CONTEXT_DIR / "requirements-cloudrun.txt",
+    )
+    copy_filtered_tree(ROOT_DIR / "gcp_risk", GCP_CLOUDRUN_CONTEXT_DIR / "gcp_risk")
+    copy_filtered_tree(ROOT_DIR / "shared", GCP_CLOUDRUN_CONTEXT_DIR / "shared")
+    return GCP_CLOUDRUN_CONTEXT_DIR
+
+
+def package_apprunner_registry_context() -> Path:
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    if APPRUNNER_REGISTRY_CONTEXT_DIR.exists():
+        shutil.rmtree(APPRUNNER_REGISTRY_CONTEXT_DIR)
+    APPRUNNER_REGISTRY_CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(APPRUNNER_REGISTRY_DOCKERFILE, APPRUNNER_REGISTRY_CONTEXT_DIR / "Dockerfile")
+    shutil.copy2(
+        ROOT_DIR / "registry_service" / "requirements-apprunner.txt",
+        APPRUNNER_REGISTRY_CONTEXT_DIR / "requirements-apprunner.txt",
+    )
+    copy_filtered_tree(ROOT_DIR / "registry_service", APPRUNNER_REGISTRY_CONTEXT_DIR / "registry_service")
+    copy_filtered_tree(ROOT_DIR / "shared", APPRUNNER_REGISTRY_CONTEXT_DIR / "shared")
+    return APPRUNNER_REGISTRY_CONTEXT_DIR
+
+
+def package_apprunner_ingestion_context() -> Path:
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    if APPRUNNER_INGESTION_CONTEXT_DIR.exists():
+        shutil.rmtree(APPRUNNER_INGESTION_CONTEXT_DIR)
+    APPRUNNER_INGESTION_CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(APPRUNNER_INGESTION_DOCKERFILE, APPRUNNER_INGESTION_CONTEXT_DIR / "Dockerfile")
+    shutil.copy2(
+        ROOT_DIR / "aws_ingestion" / "requirements-apprunner.txt",
+        APPRUNNER_INGESTION_CONTEXT_DIR / "requirements-apprunner.txt",
+    )
+    copy_filtered_tree(ROOT_DIR / "aws_ingestion", APPRUNNER_INGESTION_CONTEXT_DIR / "aws_ingestion")
+    copy_filtered_tree(ROOT_DIR / "shared", APPRUNNER_INGESTION_CONTEXT_DIR / "shared")
+    return APPRUNNER_INGESTION_CONTEXT_DIR
+
+
 def output_value(command: list[str]) -> str:
     return run(command).stdout.strip()
 
@@ -265,6 +336,225 @@ def load_containerapp(resource_group: str, app_name: str) -> dict[str, Any] | No
     return parse_json_output(result.stdout)
 
 
+def ensure_apprunner_ecr_role(account_id: str) -> str:
+    role_arn = f"arn:aws:iam::{account_id}:role/{APPRUNNER_ECR_ACCESS_ROLE_NAME}"
+    role_check = run(
+        ["aws", "iam", "get-role", "--role-name", APPRUNNER_ECR_ACCESS_ROLE_NAME, "--output", "json"],
+        check=False,
+    )
+    if role_check.returncode != 0:
+        run(
+            [
+                "aws",
+                "iam",
+                "create-role",
+                "--role-name",
+                APPRUNNER_ECR_ACCESS_ROLE_NAME,
+                "--assume-role-policy-document",
+                json.dumps(APPRUNNER_TRUST_POLICY),
+                "--description",
+                "Allows AWS App Runner to pull QuantIAN images from ECR",
+                "--output",
+                "json",
+            ]
+        )
+        run(
+            [
+                "aws",
+                "iam",
+                "attach-role-policy",
+                "--role-name",
+                APPRUNNER_ECR_ACCESS_ROLE_NAME,
+                "--policy-arn",
+                APPRUNNER_ECR_ACCESS_POLICY_ARN,
+            ]
+        )
+        time.sleep(8)
+    return role_arn
+
+
+def ensure_ecr_repository(region: str, repository_name: str) -> str:
+    describe = run(
+        [
+            "aws",
+            "ecr",
+            "describe-repositories",
+            "--region",
+            region,
+            "--repository-names",
+            repository_name,
+            "--output",
+            "json",
+        ],
+        check=False,
+    )
+    if describe.returncode == 0:
+        payload = parse_json_output(describe.stdout)
+        return payload["repositories"][0]["repositoryUri"]
+    create = run_json(
+        [
+            "aws",
+            "ecr",
+            "create-repository",
+            "--region",
+            region,
+            "--repository-name",
+            repository_name,
+            "--image-scanning-configuration",
+            "scanOnPush=true",
+            "--output",
+            "json",
+        ]
+    )
+    return create["repository"]["repositoryUri"]
+
+
+def docker_login_ecr(region: str, registry_host: str) -> None:
+    password = output_value(["aws", "ecr", "get-login-password", "--region", region])
+    completed = subprocess.run(
+        ["docker", "login", "--username", "AWS", "--password-stdin", registry_host],
+        input=password,
+        text=True,
+        cwd=ROOT_DIR,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        if completed.stdout:
+            print(completed.stdout, file=sys.stderr, end="")
+        if completed.stderr:
+            print(completed.stderr, file=sys.stderr, end="")
+        raise SystemExit(completed.returncode)
+
+
+def load_apprunner_service(service_arn: str, region: str) -> dict[str, Any] | None:
+    result = run(
+        [
+            "aws",
+            "apprunner",
+            "describe-service",
+            "--region",
+            region,
+            "--service-arn",
+            service_arn,
+            "--output",
+            "json",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return parse_json_output(result.stdout)
+
+
+def find_apprunner_service(service_name: str, region: str) -> dict[str, Any] | None:
+    payload = run_json(
+        ["aws", "apprunner", "list-services", "--region", region, "--output", "json"]
+    )
+    for entry in payload.get("ServiceSummaryList", []):
+        if entry.get("ServiceName") == service_name:
+            return entry
+    return None
+
+
+def wait_for_apprunner_running(service_arn: str, region: str, *, timeout_seconds: float = 600.0) -> dict[str, Any]:
+    deadline = time.time() + timeout_seconds
+    last: dict[str, Any] = {}
+    while time.time() < deadline:
+        payload = load_apprunner_service(service_arn, region)
+        if payload:
+            last = payload
+            status_value = payload.get("Service", {}).get("Status")
+            if status_value == "RUNNING":
+                return payload
+            if status_value in {"CREATE_FAILED", "DELETE_FAILED", "PAUSED"}:
+                raise SystemExit(f"App Runner service entered terminal state: {status_value}")
+        time.sleep(8)
+    raise SystemExit(f"Timed out waiting for App Runner service {service_arn} to become RUNNING; last status was {last.get('Service', {}).get('Status')}")
+
+
+def apprunner_env_pairs(kind: str, endpoints: dict[str, str], *, base_url: str, port: int) -> dict[str, str]:
+    common = {
+        "APP_ENV": "cloud",
+        "SERVICE_HOST": "0.0.0.0",
+        "SERVICE_PORT": str(port),
+        "ENABLE_SERVICE_RUNTIME": "true",
+        "REQUEST_TIMEOUT_SECONDS": "8",
+        "HEARTBEAT_INTERVAL_SECONDS": "20",
+        "QUANTIAN_DATA_DIR": "/tmp/quantian-data",
+        "STORAGE_BACKEND": "memory",
+        "BASE_URL": base_url,
+        "REGISTRY_URL": endpoints.get("REGISTRY_URL", base_url if kind == "registry" else ""),
+        "LEDGER_URL": endpoints.get("REGISTRY_URL", base_url if kind == "registry" else ""),
+    }
+    if kind == "registry":
+        common["LEDGER_VERIFY_INTERVAL_SECONDS"] = "60"
+    if kind == "ingestion":
+        common["AWS_INGESTION_BASE_URL"] = base_url
+        common["AWS_INGESTION_URL"] = base_url
+        common["AZURE_ANOMALY_URL"] = endpoints.get("ANOMALY_URL", "")
+        common["GCP_RISK_URL"] = endpoints.get("RISK_URL", "")
+    return common
+
+
+def load_cloudrun_service(project: str, region: str, service_name: str) -> dict[str, Any] | None:
+    result = run(
+        [
+            "gcloud",
+            "run",
+            "services",
+            "describe",
+            service_name,
+            "--project",
+            project,
+            "--region",
+            region,
+            "--platform",
+            "managed",
+            "--format",
+            "json",
+        ],
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return parse_json_output(result.stdout)
+
+
+def extract_cloudrun_url(payload: dict[str, Any]) -> str | None:
+    status_block = payload.get("status", {})
+    return status_block.get("url") or payload.get("url")
+
+
+def gcp_cloudrun_env_pairs(endpoints: dict[str, str], *, base_url: str) -> dict[str, str]:
+    return {
+        "APP_ENV": "cloud",
+        "SERVICE_HOST": "0.0.0.0",
+        "SERVICE_PORT": str(GCP_CLOUDRUN_PORT),
+        "ENABLE_SERVICE_RUNTIME": "true",
+        "REQUEST_TIMEOUT_SECONDS": "8",
+        "HEARTBEAT_INTERVAL_SECONDS": "20",
+        "QUANTIAN_DATA_DIR": "/tmp/quantian-data",
+        "STORAGE_BACKEND": "memory",
+        "BASE_URL": base_url,
+        "GCP_RISK_BASE_URL": base_url,
+        "GCP_RISK_URL": base_url,
+        "REGISTRY_URL": endpoints["REGISTRY_URL"],
+        "LEDGER_URL": endpoints["REGISTRY_URL"],
+        "AWS_INGESTION_URL": endpoints["INGESTION_URL"],
+        "AZURE_ANOMALY_URL": endpoints.get("ANOMALY_URL", ""),
+    }
+
+
+def encode_cloudrun_env_vars(env_pairs: dict[str, str]) -> str:
+    parts = []
+    for key, value in env_pairs.items():
+        if "@" in value:
+            raise SystemExit(f"Cloud Run env var {key} cannot contain '@' (used as our delimiter)")
+        parts.append(f"{key}={value}")
+    return "^@^" + "@".join(parts)
+
+
 def azure_container_env_vars(azure: dict[str, Any], endpoints: dict[str, str], *, base_url: str) -> list[str]:
     secret_ref = f"secretref:{AZURE_CONTAINERAPP_SECRET_NAME}"
     return [
@@ -290,173 +580,73 @@ def azure_container_env_vars(azure: dict[str, Any], endpoints: dict[str, str], *
 
 
 def provision_aws(args: argparse.Namespace) -> dict[str, Any]:
-    existing = load_manifest("aws")
-    if existing and existing.get("public_ip") and not args.replace:
-        return existing
+    existing = load_manifest("aws") or {}
+    existing = existing if existing.get("type") == "app_runner" and not args.replace else {}
 
-    ensure_ssh_key()
-
-    subnet_data = run_json(["aws", "ec2", "describe-subnets", "--region", args.aws_region, "--output", "json"])
-    subnets = subnet_data.get("Subnets", [])
-    default_subnets = [subnet for subnet in subnets if subnet.get("DefaultForAz")]
-    if not default_subnets:
-        raise SystemExit("No default AWS subnet found for provisioning.")
-    subnet = sorted(default_subnets, key=lambda item: item["AvailabilityZone"])[0]
-    vpc_id = subnet["VpcId"]
-    subnet_id = subnet["SubnetId"]
-
-    image_data = run_json(
-        [
-            "aws",
-            "ec2",
-            "describe-images",
-            "--region",
-            args.aws_region,
-            "--owners",
-            "099720109477",
-            "--filters",
-            "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-jammy-22.04-amd64-server-*",
-            "Name=state,Values=available",
-            "Name=architecture,Values=x86_64",
-            "--output",
-            "json",
-        ]
+    region = args.aws_region or existing.get("region") or "us-east-1"
+    account_id = (
+        args.aws_account_id
+        or existing.get("account_id")
+        or output_value(["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"])
     )
-    images = image_data.get("Images", [])
-    if not images:
-        raise SystemExit("No Ubuntu 22.04 AWS image was returned.")
-    image_id = sorted(images, key=lambda item: item["CreationDate"], reverse=True)[0]["ImageId"]
+    if not account_id:
+        raise SystemExit("Unable to resolve AWS account ID; configure aws CLI credentials.")
 
-    deploy_id = args.deploy_id or utc_deploy_id()
-    key_name = f"quantian-demo-key-{deploy_id}"
-    security_group_name = f"quantian-aws-host-{deploy_id}"
+    registry_host = f"{account_id}.dkr.ecr.{region}.amazonaws.com"
+    role_arn = ensure_apprunner_ecr_role(account_id)
 
-    run(
-        [
-            "aws",
-            "ec2",
-            "import-key-pair",
-            "--region",
-            args.aws_region,
-            "--key-name",
-            key_name,
-            "--public-key-material",
-            f"fileb://{SSH_PUBLIC_KEY_PATH}",
-            "--output",
-            "json",
-        ]
+    registry_repo_name = (
+        args.aws_registry_repo or existing.get("registry", {}).get("ecr_repository") or "quantian-registry"
     )
-
-    security_group = run_json(
-        [
-            "aws",
-            "ec2",
-            "create-security-group",
-            "--region",
-            args.aws_region,
-            "--group-name",
-            security_group_name,
-            "--description",
-            "QuantIAN AWS registry, ingestion, and dashboard host",
-            "--vpc-id",
-            vpc_id,
-            "--output",
-            "json",
-        ]
+    ingestion_repo_name = (
+        args.aws_ingestion_repo or existing.get("ingestion", {}).get("ecr_repository") or "quantian-ingestion"
     )
-    security_group_id = security_group["GroupId"]
+    registry_repo_uri = ensure_ecr_repository(region, registry_repo_name)
+    ingestion_repo_uri = ensure_ecr_repository(region, ingestion_repo_name)
 
-    for port in (22, 8000, 8001, 8501):
-        soft_fail(
-            [
-                "aws",
-                "ec2",
-                "authorize-security-group-ingress",
-                "--region",
-                args.aws_region,
-                "--group-id",
-                security_group_id,
-                "--protocol",
-                "tcp",
-                "--port",
-                str(port),
-                "--cidr",
-                "0.0.0.0/0",
-            ],
-            ok_substrings=("InvalidPermission.Duplicate",),
-        )
-
-    instance_data = run_json(
-        [
-            "aws",
-            "ec2",
-            "run-instances",
-            "--region",
-            args.aws_region,
-            "--image-id",
-            image_id,
-            "--instance-type",
-            args.aws_instance_type,
-            "--key-name",
-            key_name,
-            "--security-group-ids",
-            security_group_id,
-            "--subnet-id",
-            subnet_id,
-            "--tag-specifications",
-            f"ResourceType=instance,Tags=[{{Key=Name,Value={args.aws_instance_name}}}]",
-            "--output",
-            "json",
-        ]
+    registry_service_name = (
+        args.aws_registry_service_name
+        or existing.get("registry", {}).get("service_name")
+        or "quantian-aws-registry"
     )
-    instance_id = instance_data["Instances"][0]["InstanceId"]
-
-    run(["aws", "ec2", "wait", "instance-running", "--region", args.aws_region, "--instance-ids", instance_id])
-
-    allocation_data = run_json(
-        [
-            "aws",
-            "ec2",
-            "allocate-address",
-            "--region",
-            args.aws_region,
-            "--domain",
-            "vpc",
-            "--output",
-            "json",
-        ]
-    )
-    allocation_id = allocation_data["AllocationId"]
-    public_ip = allocation_data["PublicIp"]
-
-    run(
-        [
-            "aws",
-            "ec2",
-            "associate-address",
-            "--region",
-            args.aws_region,
-            "--instance-id",
-            instance_id,
-            "--allocation-id",
-            allocation_id,
-        ]
+    ingestion_service_name = (
+        args.aws_ingestion_service_name
+        or existing.get("ingestion", {}).get("service_name")
+        or "quantian-aws-ingestion"
     )
 
     return save_manifest(
         "aws",
         {
-            "allocation_id": allocation_id,
-            "deploy_id": deploy_id,
-            "instance_id": instance_id,
-            "instance_name": args.aws_instance_name,
-            "key_name": key_name,
-            "public_ip": public_ip,
-            "region": args.aws_region,
-            "security_group_id": security_group_id,
-            "ssh_user": "ubuntu",
-            "subnet_id": subnet_id,
-            "vpc_id": vpc_id,
+            "type": "app_runner",
+            "account_id": account_id,
+            "region": region,
+            "registry_host": registry_host,
+            "ecr_access_role_arn": role_arn,
+            "registry": {
+                "service_name": registry_service_name,
+                "ecr_repository": registry_repo_name,
+                "ecr_repository_uri": registry_repo_uri,
+                "port": APPRUNNER_REGISTRY_PORT,
+                "cpu": existing.get("registry", {}).get("cpu", args.aws_cpu),
+                "memory": existing.get("registry", {}).get("memory", args.aws_memory),
+                "service_arn": existing.get("registry", {}).get("service_arn"),
+                "base_url": existing.get("registry", {}).get("base_url"),
+                "image_ref": existing.get("registry", {}).get("image_ref"),
+                "image_tag": existing.get("registry", {}).get("image_tag"),
+            },
+            "ingestion": {
+                "service_name": ingestion_service_name,
+                "ecr_repository": ingestion_repo_name,
+                "ecr_repository_uri": ingestion_repo_uri,
+                "port": APPRUNNER_INGESTION_PORT,
+                "cpu": existing.get("ingestion", {}).get("cpu", args.aws_cpu),
+                "memory": existing.get("ingestion", {}).get("memory", args.aws_memory),
+                "service_arn": existing.get("ingestion", {}).get("service_arn"),
+                "base_url": existing.get("ingestion", {}).get("base_url"),
+                "image_ref": existing.get("ingestion", {}).get("image_ref"),
+                "image_tag": existing.get("ingestion", {}).get("image_tag"),
+            },
         },
     )
 
@@ -696,114 +886,98 @@ def provision_azure(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def provision_gcp(args: argparse.Namespace) -> dict[str, Any]:
-    existing = load_manifest("gcp")
-    if existing and existing.get("public_ip") and not args.replace:
-        return existing
+    existing = load_manifest("gcp") or {}
+    existing = existing if existing.get("type") == "cloud_run" and not args.replace else {}
 
-    firewall_check = run(
-        ["gcloud", "compute", "firewall-rules", "describe", args.gcp_firewall_rule, "--format=json"],
-        check=False,
+    project = args.gcp_project or existing.get("project") or output_value(
+        ["gcloud", "config", "get-value", "project"]
     )
-    if firewall_check.returncode != 0:
+    if not project:
+        raise SystemExit("Unable to resolve GCP project (set --gcp-project or gcloud config).")
+
+    region = args.gcp_region or existing.get("region") or "us-central1"
+    service_name = args.gcp_service_name or existing.get("service_name") or "quantian-gcp-risk"
+    repository = args.gcp_repository or existing.get("repository") or "quantian"
+    image_repository = (
+        args.gcp_image_repository or existing.get("image_repository") or "gcp-risk"
+    )
+    registry_host = f"{region}-docker.pkg.dev"
+
+    for api in ("run.googleapis.com", "artifactregistry.googleapis.com", "cloudbuild.googleapis.com"):
         run(
             [
                 "gcloud",
-                "compute",
-                "firewall-rules",
-                "create",
-                args.gcp_firewall_rule,
-                "--allow",
-                "tcp:8003",
-                "--source-ranges",
-                "0.0.0.0/0",
-                "--target-tags",
-                args.gcp_network_tag,
-                "--format=json",
-            ]
+                "services",
+                "enable",
+                api,
+                "--project",
+                project,
+            ],
+            capture_output=False,
         )
 
-    instance_result = run(
+    repo_check = run(
         [
             "gcloud",
-            "compute",
-            "instances",
+            "artifacts",
+            "repositories",
             "describe",
-            args.gcp_instance_name,
-            "--zone",
-            args.gcp_zone,
-            "--format=json",
+            repository,
+            "--project",
+            project,
+            "--location",
+            region,
+            "--format",
+            "json",
         ],
         check=False,
     )
-
-    if instance_result.returncode != 0:
+    if repo_check.returncode != 0:
         run(
             [
                 "gcloud",
-                "compute",
-                "instances",
+                "artifacts",
+                "repositories",
                 "create",
-                args.gcp_instance_name,
-                "--zone",
-                args.gcp_zone,
-                "--machine-type",
-                args.gcp_machine_type,
-                "--image-family",
-                "ubuntu-2204-lts",
-                "--image-project",
-                "ubuntu-os-cloud",
-                "--boot-disk-size",
-                "20GB",
-                "--tags",
-                args.gcp_network_tag,
-                "--format=json",
+                repository,
+                "--project",
+                project,
+                "--location",
+                region,
+                "--repository-format",
+                "docker",
+                "--description",
+                "QuantIAN GCP Cloud Run images",
+                "--format",
+                "json",
             ]
         )
 
-    instance_data = run_json(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "describe",
-            args.gcp_instance_name,
-            "--zone",
-            args.gcp_zone,
-            "--format=json",
-        ]
-    )
-    access_configs = instance_data["networkInterfaces"][0]["accessConfigs"]
-    public_ip = access_configs[0]["natIP"]
+    service_data = load_cloudrun_service(project, region, service_name) or {}
+    base_url = extract_cloudrun_url(service_data)
 
-    project_name = run(["gcloud", "config", "get-value", "project"]).stdout.strip()
     return save_manifest(
         "gcp",
         {
-            "instance": args.gcp_instance_name,
-            "project": project_name,
-            "public_ip": public_ip,
-            "ssh_user": args.gcp_ssh_user,
-            "zone": args.gcp_zone,
+            "type": "cloud_run",
+            "project": project,
+            "region": region,
+            "service_name": service_name,
+            "repository": repository,
+            "image_repository": image_repository,
+            "registry_host": registry_host,
+            "base_url": base_url,
+            "default_hostname": base_url.removeprefix("https://") if base_url else None,
+            "target_port": GCP_CLOUDRUN_PORT,
+            "cpu": existing.get("cpu", args.gcp_cpu),
+            "memory": existing.get("memory", args.gcp_memory),
+            "min_instances": existing.get("min_instances", args.gcp_min_instances),
+            "max_instances": existing.get("max_instances", args.gcp_max_instances),
         },
     )
 
 
 def upload_bundle(provider: str, manifest: dict[str, Any]) -> None:
-    if provider == "gcp":
-        run(
-            [
-                "gcloud",
-                "compute",
-                "scp",
-                str(BUNDLE_PATH),
-                f"{manifest['instance']}:/tmp/quantian-deploy.tar.gz",
-                "--zone",
-                manifest["zone"],
-            ],
-            capture_output=False,
-        )
-        return
-
     ssh_user = manifest.get("ssh_user", "ubuntu")
     run(
         [
@@ -820,22 +994,6 @@ def upload_bundle(provider: str, manifest: dict[str, Any]) -> None:
 
 
 def run_remote(provider: str, manifest: dict[str, Any], command: str) -> None:
-    if provider == "gcp":
-        run(
-            [
-                "gcloud",
-                "compute",
-                "ssh",
-                manifest["instance"],
-                "--zone",
-                manifest["zone"],
-                "--command",
-                command,
-            ],
-            capture_output=False,
-        )
-        return
-
     ssh_user = manifest.get("ssh_user", "ubuntu")
     run(
         [
@@ -1049,6 +1207,268 @@ def deploy_azure_container_app(azure: dict[str, Any], endpoints: dict[str, str])
     )
 
 
+def build_gcp_container_image(gcp: dict[str, Any], *, deploy_id: str | None = None) -> tuple[str, str]:
+    package_gcp_cloudrun_context()
+    image_tag = deploy_id or utc_deploy_id()
+    image_ref = (
+        f"{gcp['registry_host']}/{gcp['project']}/"
+        f"{gcp['repository']}/{gcp['image_repository']}:{image_tag}"
+    )
+    run(
+        [
+            "gcloud",
+            "builds",
+            "submit",
+            str(GCP_CLOUDRUN_CONTEXT_DIR),
+            "--project",
+            gcp["project"],
+            "--tag",
+            image_ref,
+        ],
+        capture_output=False,
+    )
+    return image_ref, image_tag
+
+
+def deploy_gcp_cloud_run(gcp: dict[str, Any], endpoints: dict[str, str]) -> dict[str, Any]:
+    image_ref, image_tag = build_gcp_container_image(gcp)
+
+    provisional_base_url = gcp.get("base_url") or "https://bootstrap.invalid"
+    env_pairs = gcp_cloudrun_env_pairs(endpoints, base_url=provisional_base_url)
+
+    run(
+        [
+            "gcloud",
+            "run",
+            "deploy",
+            gcp["service_name"],
+            "--project",
+            gcp["project"],
+            "--region",
+            gcp["region"],
+            "--platform",
+            "managed",
+            "--image",
+            image_ref,
+            "--port",
+            str(gcp["target_port"]),
+            "--cpu",
+            str(gcp["cpu"]),
+            "--memory",
+            gcp["memory"],
+            "--min-instances",
+            str(gcp["min_instances"]),
+            "--max-instances",
+            str(gcp["max_instances"]),
+            "--allow-unauthenticated",
+            "--set-env-vars",
+            encode_cloudrun_env_vars(env_pairs),
+            "--quiet",
+            "--format",
+            "json",
+        ],
+        capture_output=False,
+    )
+
+    service_data = load_cloudrun_service(gcp["project"], gcp["region"], gcp["service_name"]) or {}
+    base_url = extract_cloudrun_url(service_data)
+    if not base_url:
+        raise SystemExit("Cloud Run service did not return a public URL.")
+
+    if base_url != provisional_base_url:
+        run(
+            [
+                "gcloud",
+                "run",
+                "services",
+                "update",
+                gcp["service_name"],
+                "--project",
+                gcp["project"],
+                "--region",
+                gcp["region"],
+                "--platform",
+                "managed",
+                "--update-env-vars",
+                f"BASE_URL={base_url},GCP_RISK_BASE_URL={base_url},GCP_RISK_URL={base_url}",
+                "--quiet",
+                "--format",
+                "json",
+            ],
+            capture_output=False,
+        )
+        service_data = load_cloudrun_service(gcp["project"], gcp["region"], gcp["service_name"]) or service_data
+
+    latest_revision = (
+        service_data.get("status", {}).get("latestReadyRevisionName")
+        or service_data.get("status", {}).get("latestCreatedRevisionName")
+    )
+
+    return save_manifest(
+        "gcp",
+        {
+            **gcp,
+            "base_url": base_url,
+            "default_hostname": base_url.removeprefix("https://") if base_url else None,
+            "image_ref": image_ref,
+            "image_tag": image_tag,
+            "latest_revision_name": latest_revision,
+        },
+    )
+
+
+def build_aws_container_image(
+    aws: dict[str, Any],
+    *,
+    kind: str,
+    deploy_id: str | None = None,
+) -> tuple[str, str]:
+    if kind == "registry":
+        context_dir = package_apprunner_registry_context()
+    elif kind == "ingestion":
+        context_dir = package_apprunner_ingestion_context()
+    else:
+        raise SystemExit(f"Unknown AWS App Runner kind: {kind}")
+    repo_uri = aws[kind]["ecr_repository_uri"]
+    image_tag = deploy_id or utc_deploy_id()
+    image_ref = f"{repo_uri}:{image_tag}"
+
+    docker_login_ecr(aws["region"], aws["registry_host"])
+    run(
+        ["docker", "build", "--platform", "linux/amd64", "-t", image_ref, str(context_dir)],
+        capture_output=False,
+    )
+    run(["docker", "push", image_ref], capture_output=False)
+    return image_ref, image_tag
+
+
+def deploy_aws_app_runner(
+    aws: dict[str, Any],
+    *,
+    kind: str,
+    endpoints: dict[str, str],
+) -> dict[str, Any]:
+    service_block = aws[kind]
+    service_name = service_block["service_name"]
+    region = aws["region"]
+    port = service_block["port"]
+    cpu = str(service_block["cpu"])
+    memory = str(service_block["memory"])
+
+    image_ref, image_tag = build_aws_container_image(aws, kind=kind)
+
+    provisional_base_url = service_block.get("base_url") or "https://bootstrap.invalid"
+    env_pairs = apprunner_env_pairs(kind, endpoints, base_url=provisional_base_url, port=port)
+
+    source_config = {
+        "ImageRepository": {
+            "ImageIdentifier": image_ref,
+            "ImageRepositoryType": "ECR",
+            "ImageConfiguration": {
+                "Port": str(port),
+                "RuntimeEnvironmentVariables": env_pairs,
+            },
+        },
+        "AutoDeploymentsEnabled": False,
+        "AuthenticationConfiguration": {"AccessRoleArn": aws["ecr_access_role_arn"]},
+    }
+    instance_config = {"Cpu": cpu, "Memory": memory}
+    health_check_config = {
+        "Protocol": "HTTP",
+        "Path": "/health",
+        "Interval": 10,
+        "Timeout": 5,
+        "HealthyThreshold": 1,
+        "UnhealthyThreshold": 5,
+    }
+
+    summary = find_apprunner_service(service_name, region)
+    if summary is None:
+        run(
+            [
+                "aws",
+                "apprunner",
+                "create-service",
+                "--region",
+                region,
+                "--service-name",
+                service_name,
+                "--source-configuration",
+                json.dumps(source_config),
+                "--instance-configuration",
+                json.dumps(instance_config),
+                "--health-check-configuration",
+                json.dumps(health_check_config),
+                "--output",
+                "json",
+            ]
+        )
+        summary = find_apprunner_service(service_name, region)
+        if summary is None:
+            raise SystemExit(f"Failed to locate App Runner service {service_name} after creation.")
+        service_arn = summary["ServiceArn"]
+    else:
+        service_arn = summary["ServiceArn"]
+        run(
+            [
+                "aws",
+                "apprunner",
+                "update-service",
+                "--region",
+                region,
+                "--service-arn",
+                service_arn,
+                "--source-configuration",
+                json.dumps(source_config),
+                "--instance-configuration",
+                json.dumps(instance_config),
+                "--health-check-configuration",
+                json.dumps(health_check_config),
+                "--output",
+                "json",
+            ]
+        )
+
+    payload = wait_for_apprunner_running(service_arn, region)
+    service_data = payload.get("Service", {})
+    service_url = service_data.get("ServiceUrl")
+    if not service_url:
+        raise SystemExit(f"App Runner service {service_name} did not expose a ServiceUrl.")
+    base_url = f"https://{service_url}"
+
+    if base_url != provisional_base_url:
+        env_pairs = apprunner_env_pairs(kind, endpoints, base_url=base_url, port=port)
+        source_config["ImageRepository"]["ImageConfiguration"]["RuntimeEnvironmentVariables"] = env_pairs
+        run(
+            [
+                "aws",
+                "apprunner",
+                "update-service",
+                "--region",
+                region,
+                "--service-arn",
+                service_arn,
+                "--source-configuration",
+                json.dumps(source_config),
+                "--output",
+                "json",
+            ]
+        )
+        wait_for_apprunner_running(service_arn, region)
+
+    updated_block = {
+        **service_block,
+        "service_arn": service_arn,
+        "base_url": base_url,
+        "default_hostname": service_url,
+        "image_ref": image_ref,
+        "image_tag": image_tag,
+    }
+    aws[kind] = updated_block
+    save_manifest("aws", aws)
+    return updated_block
+
+
 def wait_for_http(url: str, *, timeout_seconds: float = 300.0) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -1083,41 +1503,80 @@ def bootstrap_hosts(_: argparse.Namespace) -> dict[str, Any]:
     azure = load_manifest("azure")
     gcp = load_manifest("gcp")
 
-    missing = [
-        provider
-        for provider, manifest in (("aws", aws), ("azure", azure), ("gcp", gcp))
-        if not manifest
-        or (provider in {"aws", "gcp"} and not manifest.get("public_ip"))
-        or (provider == "azure" and not manifest.get("app_name"))
-    ]
+    missing = []
+    if (
+        not aws
+        or aws.get("type") != "app_runner"
+        or not aws.get("registry", {}).get("ecr_repository_uri")
+        or not aws.get("ingestion", {}).get("ecr_repository_uri")
+    ):
+        missing.append("aws")
+    if not azure or not azure.get("app_name"):
+        missing.append("azure")
+    if not gcp or not gcp.get("service_name") or not gcp.get("project") or not gcp.get("region"):
+        missing.append("gcp")
     if missing:
         raise SystemExit(f"Missing live manifest(s): {', '.join(missing)}")
 
-    package_bundle()
-    provisional_endpoints = {
-        "REGISTRY_URL": f"http://{aws['public_ip']}:8000",
-        "INGESTION_URL": f"http://{aws['public_ip']}:8001",
-        "RISK_URL": f"http://{gcp['public_ip']}:8003",
+    registry_block = deploy_aws_app_runner(aws, kind="registry", endpoints={})
+    aws = load_manifest("aws") or aws
+    registry_url = registry_block["base_url"]
+
+    ingestion_endpoints = {"REGISTRY_URL": registry_url}
+    ingestion_block = deploy_aws_app_runner(aws, kind="ingestion", endpoints=ingestion_endpoints)
+    aws = load_manifest("aws") or aws
+    ingestion_url = ingestion_block["base_url"]
+
+    gcp_endpoints = {"REGISTRY_URL": registry_url, "INGESTION_URL": ingestion_url}
+    gcp = deploy_gcp_cloud_run(gcp, gcp_endpoints)
+    risk_url = gcp["base_url"]
+
+    azure_endpoints = {**gcp_endpoints, "RISK_URL": risk_url}
+    azure = deploy_azure_container_app(azure, azure_endpoints)
+    anomaly_url = azure["base_url"]
+
+    run(
+        [
+            "gcloud",
+            "run",
+            "services",
+            "update",
+            gcp["service_name"],
+            "--project",
+            gcp["project"],
+            "--region",
+            gcp["region"],
+            "--platform",
+            "managed",
+            "--update-env-vars",
+            f"AZURE_ANOMALY_URL={anomaly_url}",
+            "--quiet",
+            "--format",
+            "json",
+        ],
+        capture_output=False,
+    )
+
+    final_ingestion_endpoints = {
+        "REGISTRY_URL": registry_url,
+        "ANOMALY_URL": anomaly_url,
+        "RISK_URL": risk_url,
     }
-    if not azure.get("base_url"):
-        azure = deploy_azure_container_app(azure, provisional_endpoints)
+    deploy_aws_app_runner(aws, kind="ingestion", endpoints=final_ingestion_endpoints)
+    aws = load_manifest("aws") or aws
+
     endpoints = {
-        **provisional_endpoints,
-        "ANOMALY_URL": azure["base_url"],
+        "REGISTRY_URL": registry_url,
+        "INGESTION_URL": ingestion_url,
+        "RISK_URL": risk_url,
+        "ANOMALY_URL": anomaly_url,
     }
-
-    upload_bundle("aws", aws)
-    run_remote("aws", aws, remote_bootstrap_command("aws", endpoints))
-
-    upload_bundle("gcp", gcp)
-    run_remote("gcp", gcp, remote_bootstrap_command("gcp", endpoints))
 
     health = {
         "registry": wait_for_http(f"{endpoints['REGISTRY_URL']}/health"),
         "ingestion": wait_for_http(f"{endpoints['INGESTION_URL']}/health"),
         "anomaly": wait_for_http(f"{endpoints['ANOMALY_URL']}/health"),
         "risk": wait_for_http(f"{endpoints['RISK_URL']}/health"),
-        "dashboard": wait_for_http(f"http://{aws['public_ip']}:8501"),
     }
 
     if health["risk"]:
@@ -1133,7 +1592,6 @@ def bootstrap_hosts(_: argparse.Namespace) -> dict[str, Any]:
     status_payload = {
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "endpoints": {
-            "dashboard": f"http://{aws['public_ip']}:8501",
             "registry": endpoints["REGISTRY_URL"],
             "ingestion": endpoints["INGESTION_URL"],
             "anomaly": endpoints["ANOMALY_URL"],
@@ -1156,14 +1614,14 @@ def collect_status(_: argparse.Namespace) -> dict[str, Any]:
         "health": {},
     }
 
-    if aws and aws.get("public_ip"):
-        status["health"]["registry"] = wait_for_http(f"http://{aws['public_ip']}:8000/health", timeout_seconds=5)
-        status["health"]["ingestion"] = wait_for_http(f"http://{aws['public_ip']}:8001/health", timeout_seconds=5)
-        status["health"]["dashboard"] = wait_for_http(f"http://{aws['public_ip']}:8501", timeout_seconds=5)
+    if aws and aws.get("registry", {}).get("base_url"):
+        status["health"]["registry"] = wait_for_http(f"{aws['registry']['base_url']}/health", timeout_seconds=5)
+    if aws and aws.get("ingestion", {}).get("base_url"):
+        status["health"]["ingestion"] = wait_for_http(f"{aws['ingestion']['base_url']}/health", timeout_seconds=5)
     if azure and azure.get("base_url"):
         status["health"]["anomaly"] = wait_for_http(f"{azure['base_url']}/health", timeout_seconds=5)
-    if gcp and gcp.get("public_ip"):
-        status["health"]["risk"] = wait_for_http(f"http://{gcp['public_ip']}:8003/health", timeout_seconds=5)
+    if gcp and gcp.get("base_url"):
+        status["health"]["risk"] = wait_for_http(f"{gcp['base_url']}/health", timeout_seconds=5)
     return status
 
 
@@ -1177,10 +1635,15 @@ def go_live(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Provision and deploy the QuantIAN live multi-cloud stack.")
     parser.add_argument("--replace", action="store_true", help="Recreate a provider resource instead of reusing dist/live manifests.")
-    parser.add_argument("--deploy-id", help="Override the AWS key/security-group suffix.")
+    parser.add_argument("--deploy-id", help="Override the image tag suffix used for built containers.")
     parser.add_argument("--aws-region", default="us-east-1")
-    parser.add_argument("--aws-instance-type", default="t3.small")
-    parser.add_argument("--aws-instance-name", default="quantian-aws-core")
+    parser.add_argument("--aws-account-id")
+    parser.add_argument("--aws-registry-repo", default="quantian-registry")
+    parser.add_argument("--aws-ingestion-repo", default="quantian-ingestion")
+    parser.add_argument("--aws-registry-service-name", default="quantian-aws-registry")
+    parser.add_argument("--aws-ingestion-service-name", default="quantian-aws-ingestion")
+    parser.add_argument("--aws-cpu", default="256")
+    parser.add_argument("--aws-memory", default="512")
     parser.add_argument("--azure-resource-group", default="quantian-rg")
     parser.add_argument("--azure-location", default="eastus")
     parser.add_argument("--azure-app-name")
@@ -1193,34 +1656,66 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--azure-memory", default="1.0Gi")
     parser.add_argument("--azure-min-replicas", type=int, default=1)
     parser.add_argument("--azure-max-replicas", type=int, default=1)
-    parser.add_argument("--gcp-zone", default="us-central1-a")
-    parser.add_argument("--gcp-instance-name", default="quantian-gcp-risk")
-    parser.add_argument("--gcp-machine-type", default="e2-small")
-    parser.add_argument("--gcp-network-tag", default="quantian-risk")
-    parser.add_argument("--gcp-firewall-rule", default="quantian-risk-allow")
-    parser.add_argument("--gcp-ssh-user", default="bhaveshgupta01")
+    parser.add_argument("--gcp-project")
+    parser.add_argument("--gcp-region", default="us-central1")
+    parser.add_argument("--gcp-service-name", default="quantian-gcp-risk")
+    parser.add_argument("--gcp-repository", default="quantian")
+    parser.add_argument("--gcp-image-repository", default="gcp-risk")
+    parser.add_argument("--gcp-cpu", default="1")
+    parser.add_argument("--gcp-memory", default="512Mi")
+    parser.add_argument("--gcp-min-instances", type=int, default=1)
+    parser.add_argument("--gcp-max-instances", type=int, default=1)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("package", help="Build the deployment tarball.")
     subparsers.add_parser(
         "package-azure",
         aliases=["package-webapp"],
         help="Build the Azure Container Apps source bundle.",
     )
-    subparsers.add_parser("provision-aws", help="Create or reuse the AWS VM and persist dist/live/aws.json.")
+    subparsers.add_parser(
+        "package-gcp",
+        help="Build the GCP Cloud Run source bundle.",
+    )
+    subparsers.add_parser(
+        "package-aws-registry",
+        help="Build the AWS App Runner source bundle for the registry service.",
+    )
+    subparsers.add_parser(
+        "package-aws-ingestion",
+        help="Build the AWS App Runner source bundle for the ingestion service.",
+    )
+    subparsers.add_parser(
+        "provision-aws",
+        help="Create or reuse the AWS App Runner ECR repos + IAM role; persist dist/live/aws.json.",
+    )
     subparsers.add_parser(
         "provision-azure",
         help="Create or reuse the Azure Container Apps infrastructure and persist dist/live/azure.json.",
     )
-    subparsers.add_parser("provision-gcp", help="Create or reuse the GCP VM and persist dist/live/gcp.json.")
+    subparsers.add_parser(
+        "provision-gcp",
+        help="Enable GCP APIs and create the Artifact Registry repo for Cloud Run; persist dist/live/gcp.json.",
+    )
+    subparsers.add_parser(
+        "deploy-aws-registry",
+        help="Build the registry image and deploy it to AWS App Runner; refresh its runtime settings.",
+    )
+    subparsers.add_parser(
+        "deploy-aws-ingestion",
+        help="Build the ingestion image and deploy it to AWS App Runner; refresh its runtime settings.",
+    )
     subparsers.add_parser(
         "deploy-azure",
         help="Deploy the Azure anomaly app to Azure Container Apps and refresh its runtime settings.",
     )
-    subparsers.add_parser("bootstrap", help="Upload the bundle and bootstrap all three hosts.")
+    subparsers.add_parser(
+        "deploy-gcp",
+        help="Build the GCP risk image and deploy it to Cloud Run; refresh its runtime settings.",
+    )
+    subparsers.add_parser("bootstrap", help="Build, push, and deploy every cloud peer in dependency order.")
     subparsers.add_parser("status", help="Check the current public health endpoints.")
-    subparsers.add_parser("go-live", help="Provision all hosts, upload the bundle, bootstrap them, and verify health.")
+    subparsers.add_parser("go-live", help="Provision all clouds and run bootstrap end-to-end.")
     return parser
 
 
@@ -1228,11 +1723,17 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if args.command == "package":
-        print(str(package_bundle()))
-        return
     if args.command in {"package-azure", "package-webapp"}:
         print(str(package_azure_containerapp_context()))
+        return
+    if args.command == "package-gcp":
+        print(str(package_gcp_cloudrun_context()))
+        return
+    if args.command == "package-aws-registry":
+        print(str(package_apprunner_registry_context()))
+        return
+    if args.command == "package-aws-ingestion":
+        print(str(package_apprunner_ingestion_context()))
         return
     if args.command == "provision-aws":
         print(json.dumps(provision_aws(args), indent=2))
@@ -1243,21 +1744,72 @@ def main() -> None:
     if args.command == "provision-gcp":
         print(json.dumps(provision_gcp(args), indent=2))
         return
+    if args.command == "deploy-aws-registry":
+        aws = load_manifest("aws")
+        if not aws or aws.get("type") != "app_runner":
+            raise SystemExit("Run provision-aws first to create the App Runner manifest.")
+        block = deploy_aws_app_runner(aws, kind="registry", endpoints={})
+        print(json.dumps({"registry": block, "deployed": True}, indent=2))
+        return
+    if args.command == "deploy-aws-ingestion":
+        aws = load_manifest("aws")
+        if not aws or aws.get("type") != "app_runner":
+            raise SystemExit("Run provision-aws first to create the App Runner manifest.")
+        registry_url = aws.get("registry", {}).get("base_url")
+        if not registry_url:
+            raise SystemExit("Registry base_url missing; run deploy-aws-registry before deploy-aws-ingestion.")
+        gcp = load_manifest("gcp")
+        azure = load_manifest("azure")
+        endpoints = {"REGISTRY_URL": registry_url}
+        if gcp and gcp.get("base_url"):
+            endpoints["RISK_URL"] = gcp["base_url"]
+        if azure and azure.get("base_url"):
+            endpoints["ANOMALY_URL"] = azure["base_url"]
+        block = deploy_aws_app_runner(aws, kind="ingestion", endpoints=endpoints)
+        print(json.dumps({"ingestion": block, "deployed": True}, indent=2))
+        return
     if args.command == "deploy-azure":
         azure = load_manifest("azure")
         aws = load_manifest("aws")
         gcp = load_manifest("gcp")
         if not azure or not azure.get("app_name") or not aws or not gcp:
             raise SystemExit("Missing aws/gcp/azure manifests required for Azure deployment.")
+        registry_url = aws.get("registry", {}).get("base_url")
+        ingestion_url = aws.get("ingestion", {}).get("base_url")
+        risk_url = gcp.get("base_url")
+        if not registry_url or not ingestion_url:
+            raise SystemExit(
+                "AWS App Runner base_urls missing; run deploy-aws-registry and deploy-aws-ingestion first."
+            )
+        if not risk_url:
+            raise SystemExit("GCP Cloud Run base_url missing; run deploy-gcp before deploy-azure.")
         azure = deploy_azure_container_app(
             azure,
             {
-                "REGISTRY_URL": f"http://{aws['public_ip']}:8000",
-                "INGESTION_URL": f"http://{aws['public_ip']}:8001",
-                "RISK_URL": f"http://{gcp['public_ip']}:8003",
+                "REGISTRY_URL": registry_url,
+                "INGESTION_URL": ingestion_url,
+                "RISK_URL": risk_url,
             },
         )
         print(json.dumps({"azure": azure, "deployed": True}, indent=2))
+        return
+    if args.command == "deploy-gcp":
+        gcp = load_manifest("gcp")
+        aws = load_manifest("aws")
+        azure = load_manifest("azure")
+        if not gcp or not gcp.get("service_name") or not aws:
+            raise SystemExit("Missing aws/gcp manifests required for Cloud Run deployment.")
+        registry_url = aws.get("registry", {}).get("base_url")
+        ingestion_url = aws.get("ingestion", {}).get("base_url")
+        if not registry_url or not ingestion_url:
+            raise SystemExit(
+                "AWS App Runner base_urls missing; run deploy-aws-registry and deploy-aws-ingestion first."
+            )
+        endpoints = {"REGISTRY_URL": registry_url, "INGESTION_URL": ingestion_url}
+        if azure and azure.get("base_url"):
+            endpoints["ANOMALY_URL"] = azure["base_url"]
+        gcp = deploy_gcp_cloud_run(gcp, endpoints)
+        print(json.dumps({"gcp": gcp, "deployed": True}, indent=2))
         return
     if args.command == "bootstrap":
         print(json.dumps(bootstrap_hosts(args), indent=2))
