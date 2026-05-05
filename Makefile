@@ -11,7 +11,8 @@ BROKER  ?= mqtt://localhost:1883
 
 .PHONY: help setup install-py install-web broker stack stack-no-iot dashboard \
         test typecheck build screenshots clean stop status push-ticks \
-        docker-build docker-up docker-up-ui docker-down docker-logs
+        docker-build docker-up docker-up-ui docker-down docker-logs \
+        teardown teardown-yes teardown-keep-storage
 
 help:  ## list available targets
 	@awk 'BEGIN{FS=":.*##"; printf "\n\033[1mQuantIAN\033[0m targets:\n\n"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -88,3 +89,12 @@ clean: stop  ## stop stack and wipe runtime state + caches
 	rm -rf data/runtime logs .pytest_cache web_dashboard/dist web_dashboard/.vite
 	find . -type d -name __pycache__ -not -path "./.venv/*" -not -path "./web_dashboard/node_modules/*" -exec rm -rf {} + 2>/dev/null || true
 	@echo "cleaned"
+
+teardown:  ## tear down ALL deployed cloud resources (interactive prompt)
+	bash scripts/teardown_cloud.sh
+
+teardown-yes:  ## tear down ALL deployed cloud resources (no prompt)
+	bash scripts/teardown_cloud.sh --yes
+
+teardown-keep-storage:  ## tear down compute only (keep ECR/AR/IAM, no prompt)
+	bash scripts/teardown_cloud.sh --yes --keep-storage

@@ -1,1 +1,19 @@
-{"project":"nyu-clopud-hw2","zone":"us-central1-a","instance":"quantian-gcp-risk","public_ip":"35.192.123.119"}
+{
+  "base_url": "https://quantian-gcp-risk-d7542qu2hq-uc.a.run.app",
+  "cpu": "1",
+  "default_hostname": "quantian-gcp-risk-d7542qu2hq-uc.a.run.app",
+  "image_ref": "us-central1-docker.pkg.dev/nyu-clopud-hw2/quantian/gcp-risk:20260505195854",
+  "image_repository": "gcp-risk",
+  "image_tag": "20260505195854",
+  "latest_revision_name": "quantian-gcp-risk-00003-xqf",
+  "max_instances": 1,
+  "memory": "512Mi",
+  "min_instances": 1,
+  "project": "nyu-clopud-hw2",
+  "region": "us-central1",
+  "registry_host": "us-central1-docker.pkg.dev",
+  "repository": "quantian",
+  "service_name": "quantian-gcp-risk",
+  "target_port": 8003,
+  "type": "cloud_run"
+}
