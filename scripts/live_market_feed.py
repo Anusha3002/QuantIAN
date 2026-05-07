@@ -114,7 +114,17 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
 
             last = df.iloc[-1]
             price  = float(last["Close"])
-            volume = float(last["Volume"]) if last["Volume"] > 0 else 1_000.0
+            volume = float(last["Volume"])
+
+            # Skip if yfinance returns NaN (common for futures when market is closed)
+            import math
+            if math.isnan(price) or math.isnan(volume):
+                log.warning("NaN values for %s (market may be closed) — skipping", ticker)
+                continue
+
+            # Use a fallback volume if zero
+            if volume <= 0:
+                volume = 1_000.0
 
             data[ticker] = {"price": price, "volume": volume}
 
@@ -128,7 +138,7 @@ def fetch_prices(tickers: list[str]) -> dict[str, dict]:
 # POST to ingestion
 # ---------------------------------------------------------------------------
 
-def post_message(endpoint: str, payload: dict, *, timeout: int = 10) -> bool:
+def post_message(endpoint: str, payload: dict, *, timeout: int = 30) -> bool:
     """POST a single MarketSensorMessage to /ingestion/messages."""
     url = f"{endpoint.rstrip('/')}/ingestion/messages"
     try:
